@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -17,7 +20,9 @@ namespace OpenSuperWhisperWindows
         {
             string[] arguments = Environment.GetCommandLineArgs();
             const string ValidatePrefix = "--validate-hotkey=";
+            const string ValidateLanguagePrefix = "--validate-language=";
             const string ExpectConfiguredPrefix = "--expect-configured-hotkey=";
+            const string ExpectConfiguredLanguagePrefix = "--expect-configured-language=";
             foreach (string argument in arguments)
             {
                 if (argument.StartsWith(ValidatePrefix, StringComparison.OrdinalIgnoreCase))
@@ -31,12 +36,33 @@ namespace OpenSuperWhisperWindows
                     return;
                 }
 
+                if (argument.StartsWith(ValidateLanguagePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    LanguageDefinition language;
+                    string error;
+                    Environment.ExitCode = LanguageDefinition.TryParse(
+                        argument.Substring(ValidateLanguagePrefix.Length),
+                        out language,
+                        out error) ? 0 : 2;
+                    return;
+                }
+
                 if (argument.StartsWith(ExpectConfiguredPrefix, StringComparison.OrdinalIgnoreCase))
                 {
                     HotkeyDefinition configured = HotkeyDefinition.Load();
                     Environment.ExitCode = string.Equals(
                         configured.DisplayName,
                         argument.Substring(ExpectConfiguredPrefix.Length),
+                        StringComparison.OrdinalIgnoreCase) ? 0 : 3;
+                    return;
+                }
+
+                if (argument.StartsWith(ExpectConfiguredLanguagePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    LanguageDefinition configuredLanguage = LanguageDefinition.Load();
+                    Environment.ExitCode = string.Equals(
+                        configuredLanguage.Code,
+                        argument.Substring(ExpectConfiguredLanguagePrefix.Length),
                         StringComparison.OrdinalIgnoreCase) ? 0 : 3;
                     return;
                 }
@@ -327,6 +353,396 @@ namespace OpenSuperWhisperWindows
         }
     }
 
+    internal sealed class LanguageDefinition
+    {
+        internal const string DefaultCode = "en";
+
+        // Language codes and names mirrored from whisper.cpp (g_lang) so invalid
+        // settings are rejected locally instead of failing inside the engine.
+        private static readonly Dictionary<string, string> LanguageNames =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "en", "English" }, { "zh", "Chinese" }, { "de", "German" },
+            { "es", "Spanish" }, { "ru", "Russian" }, { "ko", "Korean" },
+            { "fr", "French" }, { "ja", "Japanese" }, { "pt", "Portuguese" },
+            { "tr", "Turkish" }, { "pl", "Polish" }, { "ca", "Catalan" },
+            { "nl", "Dutch" }, { "ar", "Arabic" }, { "sv", "Swedish" },
+            { "it", "Italian" }, { "id", "Indonesian" }, { "hi", "Hindi" },
+            { "fi", "Finnish" }, { "vi", "Vietnamese" }, { "he", "Hebrew" },
+            { "uk", "Ukrainian" }, { "el", "Greek" }, { "ms", "Malay" },
+            { "cs", "Czech" }, { "ro", "Romanian" }, { "da", "Danish" },
+            { "hu", "Hungarian" }, { "ta", "Tamil" }, { "no", "Norwegian" },
+            { "th", "Thai" }, { "ur", "Urdu" }, { "hr", "Croatian" },
+            { "bg", "Bulgarian" }, { "lt", "Lithuanian" }, { "la", "Latin" },
+            { "mi", "Maori" }, { "ml", "Malayalam" }, { "cy", "Welsh" },
+            { "sk", "Slovak" }, { "te", "Telugu" }, { "fa", "Persian" },
+            { "lv", "Latvian" }, { "bn", "Bengali" }, { "sr", "Serbian" },
+            { "az", "Azerbaijani" }, { "sl", "Slovenian" }, { "kn", "Kannada" },
+            { "et", "Estonian" }, { "mk", "Macedonian" }, { "br", "Breton" },
+            { "eu", "Basque" }, { "is", "Icelandic" }, { "hy", "Armenian" },
+            { "ne", "Nepali" }, { "mn", "Mongolian" }, { "bs", "Bosnian" },
+            { "kk", "Kazakh" }, { "sq", "Albanian" }, { "sw", "Swahili" },
+            { "gl", "Galician" }, { "mr", "Marathi" }, { "pa", "Punjabi" },
+            { "si", "Sinhala" }, { "km", "Khmer" }, { "sn", "Shona" },
+            { "yo", "Yoruba" }, { "so", "Somali" }, { "af", "Afrikaans" },
+            { "oc", "Occitan" }, { "ka", "Georgian" }, { "be", "Belarusian" },
+            { "tg", "Tajik" }, { "sd", "Sindhi" }, { "gu", "Gujarati" },
+            { "am", "Amharic" }, { "yi", "Yiddish" }, { "lo", "Lao" },
+            { "uz", "Uzbek" }, { "fo", "Faroese" }, { "ht", "Haitian Creole" },
+            { "ps", "Pashto" }, { "tk", "Turkmen" }, { "nn", "Nynorsk" },
+            { "mt", "Maltese" }, { "sa", "Sanskrit" }, { "lb", "Luxembourgish" },
+            { "my", "Myanmar" }, { "bo", "Tibetan" }, { "tl", "Tagalog" },
+            { "mg", "Malagasy" }, { "as", "Assamese" }, { "tt", "Tatar" },
+            { "haw", "Hawaiian" }, { "ln", "Lingala" }, { "ha", "Hausa" },
+            { "ba", "Bashkir" }, { "jw", "Javanese" }, { "su", "Sundanese" },
+            { "yue", "Cantonese" }
+        };
+
+        private LanguageDefinition(string code, string displayName)
+        {
+            Code = code;
+            DisplayName = displayName;
+        }
+
+        internal string Code { get; private set; }
+        internal string DisplayName { get; private set; }
+
+        internal static string ConfigurationPath
+        {
+            get
+            {
+                string overrideDirectory = Environment.GetEnvironmentVariable("OPENSUPERWHISPER_CONFIG_DIR");
+                if (!string.IsNullOrWhiteSpace(overrideDirectory))
+                {
+                    return Path.Combine(overrideDirectory, "language.txt");
+                }
+
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OpenSuperWhisper",
+                    "language.txt");
+            }
+        }
+
+        internal static LanguageDefinition Load()
+        {
+            string configuredText = DefaultCode;
+            try
+            {
+                if (File.Exists(ConfigurationPath))
+                {
+                    configuredText = File.ReadAllText(ConfigurationPath, Encoding.UTF8).Trim();
+                }
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("Could not read language configuration: " + exception.Message);
+            }
+
+            LanguageDefinition definition;
+            string error;
+            if (TryParse(configuredText, out definition, out error))
+            {
+                return definition;
+            }
+
+            AppLog.Write("Invalid language configuration '" + configuredText + "': " + error + ". Using " + DefaultCode + ".");
+            TryParse(DefaultCode, out definition, out error);
+            return definition;
+        }
+
+        internal static bool TryParse(string text, out LanguageDefinition definition, out string error)
+        {
+            definition = null;
+            error = null;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                error = "The language cannot be empty";
+                return false;
+            }
+
+            string candidate = text.Trim();
+            if (candidate.Equals("auto", StringComparison.OrdinalIgnoreCase) ||
+                candidate.Equals("automatic", StringComparison.OrdinalIgnoreCase))
+            {
+                definition = new LanguageDefinition("auto", "Auto-detect");
+                return true;
+            }
+
+            foreach (KeyValuePair<string, string> entry in LanguageNames)
+            {
+                if (entry.Key.Equals(candidate, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Value.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                {
+                    definition = new LanguageDefinition(entry.Key.ToLowerInvariant(), entry.Value);
+                    return true;
+                }
+            }
+
+            error = "Unsupported language '" + candidate + "'. Use a code such as en or de, a name such as English, or auto.";
+            return false;
+        }
+    }
+
+    // Keeps a whisper-server process running with the model permanently loaded
+    // (in VRAM on CUDA builds) so each dictation skips the model-load step.
+    // Every failure degrades silently to the per-dictation whisper-cli path.
+    internal sealed class WhisperServer
+    {
+        private readonly object gate = new object();
+        private readonly string serverPath;
+        private readonly string modelPath;
+        private readonly LanguageDefinition language;
+        private readonly int threadCount;
+
+        private Process process;
+        private int port;
+        private volatile bool ready;
+
+        internal WhisperServer(string serverPath, string modelPath, LanguageDefinition language, int threadCount)
+        {
+            this.serverPath = serverPath;
+            this.modelPath = modelPath;
+            this.language = language;
+            this.threadCount = threadCount;
+        }
+
+        internal bool IsAvailable
+        {
+            get
+            {
+                Process current = process;
+                return ready && current != null && !current.HasExited;
+            }
+        }
+
+        internal void StartInBackground()
+        {
+            Task.Run(delegate { StartAndWaitForReady(); });
+        }
+
+        internal string Transcribe(string audioPath)
+        {
+            if (!IsAvailable)
+            {
+                return null;
+            }
+
+            try
+            {
+                return PostInference(audioPath);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("whisper-server transcription failed; falling back to whisper-cli. " + exception.Message);
+                ready = false;
+                return null;
+            }
+        }
+
+        internal void Shutdown()
+        {
+            lock (gate)
+            {
+                ready = false;
+                StopProcess();
+            }
+        }
+
+        private void StartAndWaitForReady()
+        {
+            try
+            {
+                lock (gate)
+                {
+                    if (ready)
+                    {
+                        return;
+                    }
+
+                    StopProcess();
+                    port = SelectFreePort();
+                    process = StartProcess(port);
+                }
+
+                if (WaitForReady(TimeSpan.FromSeconds(180)))
+                {
+                    ready = true;
+                    AppLog.Write("whisper-server ready on port " + port + ". The model stays loaded between dictations.");
+                }
+                else
+                {
+                    AppLog.Write("whisper-server did not become ready; dictations will use whisper-cli.");
+                    Shutdown();
+                }
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("whisper-server could not start; dictations will use whisper-cli. " + exception.Message);
+                Shutdown();
+            }
+        }
+
+        private static int SelectFreePort()
+        {
+            TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            int selectedPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+            return selectedPort;
+        }
+
+        private Process StartProcess(int selectedPort)
+        {
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = serverPath;
+            startInfo.Arguments =
+                "-m \"" + modelPath + "\" " +
+                "-l " + language.Code + " " +
+                "-t " + threadCount + " " +
+                "--host 127.0.0.1 --port " + selectedPort;
+            startInfo.WorkingDirectory = Path.GetDirectoryName(serverPath);
+            startInfo.UseShellExecute = false;
+            startInfo.CreateNoWindow = true;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+
+            Process newProcess = Process.Start(startInfo);
+            newProcess.OutputDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+            {
+                if (eventArgs.Data != null)
+                {
+                    AppLog.Write("[server] " + eventArgs.Data);
+                }
+            };
+            newProcess.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+            {
+                if (eventArgs.Data != null)
+                {
+                    AppLog.Write("[server] " + eventArgs.Data);
+                }
+            };
+            newProcess.BeginOutputReadLine();
+            newProcess.BeginErrorReadLine();
+            AppLog.Write("whisper-server starting on port " + selectedPort + " (language " + language.Code + ").");
+            return newProcess;
+        }
+
+        private bool WaitForReady(TimeSpan timeout)
+        {
+            DateTime deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                Process current = process;
+                if (current == null || current.HasExited)
+                {
+                    return false;
+                }
+
+                if (ProbeHealth())
+                {
+                    return true;
+                }
+
+                Thread.Sleep(400);
+            }
+
+            return false;
+        }
+
+        private bool ProbeHealth()
+        {
+            try
+            {
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + "/health");
+                request.Method = "GET";
+                request.Timeout = 2000;
+                request.ReadWriteTimeout = 2000;
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    return response.StatusCode == HttpStatusCode.OK;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string PostInference(string audioPath)
+        {
+            string boundary = "----OpenSuperWhisper" + Guid.NewGuid().ToString("N");
+            StringBuilder fields = new StringBuilder();
+            AppendFormField(fields, boundary, "response_format", "text");
+            AppendFormField(fields, boundary, "language", language.Code);
+
+            string fileHeader =
+                "--" + boundary + "\r\n" +
+                "Content-Disposition: form-data; name=\"file\"; filename=\"" +
+                Path.GetFileName(audioPath) + "\"\r\n" +
+                "Content-Type: audio/wav\r\n\r\n";
+
+            byte[] headBytes = Encoding.UTF8.GetBytes(fields.ToString() + fileHeader);
+            byte[] fileBytes = File.ReadAllBytes(audioPath);
+            byte[] tailBytes = Encoding.UTF8.GetBytes("\r\n--" + boundary + "--\r\n");
+
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + "/inference");
+            request.Method = "POST";
+            request.ContentType = "multipart/form-data; boundary=" + boundary;
+            request.Timeout = 600000;
+            request.ReadWriteTimeout = 600000;
+            request.ContentLength = headBytes.LongLength + fileBytes.LongLength + tailBytes.LongLength;
+
+            using (Stream requestStream = request.GetRequestStream())
+            {
+                requestStream.Write(headBytes, 0, headBytes.Length);
+                requestStream.Write(fileBytes, 0, fileBytes.Length);
+                requestStream.Write(tailBytes, 0, tailBytes.Length);
+            }
+
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+            {
+                return reader.ReadToEnd();
+            }
+        }
+
+        private static void AppendFormField(StringBuilder builder, string boundary, string name, string value)
+        {
+            builder.Append("--" + boundary + "\r\n");
+            builder.Append("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n");
+            builder.Append(value);
+            builder.Append("\r\n");
+        }
+
+        private void StopProcess()
+        {
+            Process current = process;
+            process = null;
+            if (current == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (!current.HasExited)
+                {
+                    current.Kill();
+                }
+                current.WaitForExit(2000);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("Could not stop whisper-server: " + exception.Message);
+            }
+            finally
+            {
+                current.Dispose();
+            }
+        }
+    }
+
     internal sealed class MainForm : Form
     {
         private const int HotkeyId = 0x5357;
@@ -344,6 +760,9 @@ namespace OpenSuperWhisperWindows
         private readonly CheckBox autoPasteCheckBox;
         private readonly NotifyIcon trayIcon;
         private readonly HotkeyDefinition hotkey;
+        private readonly LanguageDefinition language;
+        private readonly int threadCount;
+        private readonly WhisperServer whisperServer;
 
         private AppState state = AppState.Idle;
         private string currentRecordingPath;
@@ -378,8 +797,14 @@ namespace OpenSuperWhisperWindows
             this.startInBackground = startInBackground;
             appDirectory = AppDomain.CurrentDomain.BaseDirectory;
             hotkey = HotkeyDefinition.Load();
+            language = LanguageDefinition.Load();
+            threadCount = Math.Max(1, Math.Min(Environment.ProcessorCount, 8));
             whisperPath = Path.Combine(appDirectory, "whisper", "whisper-cli.exe");
             modelPath = Path.Combine(appDirectory, "models", "ggml-base.bin");
+            string whisperServerPath = Path.Combine(appDirectory, "whisper", "whisper-server.exe");
+            whisperServer = File.Exists(whisperServerPath)
+                ? new WhisperServer(whisperServerPath, modelPath, language, threadCount)
+                : null;
             recordingsDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "OpenSuperWhisper",
@@ -538,6 +963,10 @@ namespace OpenSuperWhisperWindows
                     Color.FromArgb(160, 65, 45));
                 recordButton.Enabled = false;
             }
+            else if (whisperServer != null)
+            {
+                whisperServer.StartInBackground();
+            }
 
             if (startInBackground)
             {
@@ -675,6 +1104,23 @@ namespace OpenSuperWhisperWindows
 
         private string Transcribe(string audioPath)
         {
+            if (whisperServer != null)
+            {
+                string serverText = whisperServer.Transcribe(audioPath);
+                if (serverText != null)
+                {
+                    AppLog.Write("Transcribed with the resident whisper-server.");
+                    return serverText;
+                }
+
+                AppLog.Write("whisper-server unavailable; transcribing with whisper-cli.");
+            }
+
+            return TranscribeWithCli(audioPath);
+        }
+
+        private string TranscribeWithCli(string audioPath)
+        {
             string outputBase = Path.Combine(
                 Path.GetDirectoryName(audioPath),
                 Path.GetFileNameWithoutExtension(audioPath) + "-transcription");
@@ -685,7 +1131,7 @@ namespace OpenSuperWhisperWindows
             startInfo.Arguments =
                 "-m \"" + modelPath + "\" " +
                 "-f \"" + audioPath + "\" " +
-                "-l auto -nt -otxt -of \"" + outputBase + "\"";
+                "-l " + language.Code + " -t " + threadCount + " -nt -otxt -of \"" + outputBase + "\"";
             startInfo.WorkingDirectory = Path.GetDirectoryName(whisperPath);
             startInfo.UseShellExecute = false;
             startInfo.CreateNoWindow = true;
@@ -812,6 +1258,11 @@ namespace OpenSuperWhisperWindows
             {
                 SendMci("stop " + RecordingAlias, true);
                 SendMci("close " + RecordingAlias, true);
+            }
+
+            if (whisperServer != null)
+            {
+                whisperServer.Shutdown();
             }
 
             if (hotkeyRegistered)

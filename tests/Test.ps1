@@ -7,6 +7,7 @@ $requiredFiles = @(
     'setup-windows.ps1',
     'install.ps1',
     'configure-hotkey.ps1',
+    'configure-language.ps1',
     'OpenSuperWhisper.cmd',
     'uninstall.ps1',
     'README.md',
@@ -49,7 +50,7 @@ if (($trackedText -join "`n") -match 'C:\\Users\\') {
 }
 
 $source = Get-Content -LiteralPath (Join-Path $repositoryRoot 'OpenSuperWhisper.Windows.cs') -Raw
-foreach ($expectedText in @('HotkeyDefinition', '--validate-hotkey=', 'hotkey.txt', 'RegisterHotKey', 'whisper-cli.exe', 'ggml-base.bin')) {
+foreach ($expectedText in @('HotkeyDefinition', 'LanguageDefinition', 'WhisperServer', '--validate-hotkey=', '--validate-language=', 'hotkey.txt', 'language.txt', 'RegisterHotKey', 'whisper-cli.exe', 'whisper-server.exe', 'ggml-base.bin')) {
     if (-not $source.Contains($expectedText)) {
         throw "Expected implementation marker is missing: $expectedText"
     }
@@ -81,13 +82,34 @@ try {
         }
     }
 
+    foreach ($validLanguage in @('en', 'auto', 'de', 'English', 'Portuguese')) {
+        $validation = Start-Process -FilePath $builtExecutable -ArgumentList ("--validate-language=$validLanguage") -WindowStyle Hidden -Wait -PassThru
+        if ($validation.ExitCode -ne 0) {
+            throw "Valid language was rejected: $validLanguage"
+        }
+    }
+
+    foreach ($invalidLanguage in @('xx', 'Klingon', 'Englishx')) {
+        $validation = Start-Process -FilePath $builtExecutable -ArgumentList ("--validate-language=$invalidLanguage") -WindowStyle Hidden -Wait -PassThru
+        if ($validation.ExitCode -eq 0) {
+            throw "Invalid language was accepted: $invalidLanguage"
+        }
+    }
+
     $configureScript = Join-Path $repositoryRoot 'configure-hotkey.ps1'
     $validated = & $configureScript -Hotkey 'Ctrl+Alt+M' -ValidateOnly -ApplicationDirectory $testBuildDirectory
     if (($validated | Select-Object -Last 1) -ne 'Ctrl+Alt+M') {
         throw 'The CMD hotkey configuration helper did not validate Ctrl+Alt+M.'
     }
 
+    $languageScript = Join-Path $repositoryRoot 'configure-language.ps1'
+    $validatedLanguage = & $languageScript -Language 'en' -ValidateOnly -ApplicationDirectory $testBuildDirectory
+    if (($validatedLanguage | Select-Object -Last 1) -ne 'en') {
+        throw 'The CMD language configuration helper did not validate en.'
+    }
+
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'configure-hotkey.ps1') -Destination $testBuildDirectory -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'configure-language.ps1') -Destination $testBuildDirectory -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'OpenSuperWhisper.cmd') -Destination $testBuildDirectory -Force
     $previousLocalAppData = $env:LOCALAPPDATA
     $previousConfigurationDirectory = $env:OPENSUPERWHISPER_CONFIG_DIR
@@ -110,9 +132,25 @@ try {
             throw 'The Windows app did not load the shortcut saved by the CMD configuration helper.'
         }
 
+        & (Join-Path $testBuildDirectory 'configure-language.ps1') -Language 'de' -NoRestart
+        $savedLanguage = Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'OpenSuperWhisper\language.txt') -Raw
+        if ($savedLanguage -ne 'de') {
+            throw "The language was not saved correctly: $savedLanguage"
+        }
+
+        $configuredLanguageCheck = Start-Process -FilePath $builtExecutable -ArgumentList '--expect-configured-language=de' -WindowStyle Hidden -Wait -PassThru
+        if ($configuredLanguageCheck.ExitCode -ne 0) {
+            throw 'The Windows app did not load the language saved by the CMD configuration helper.'
+        }
+
         $changedOutput = & $env:ComSpec /d /c call (Join-Path $testBuildDirectory 'OpenSuperWhisper.cmd') show 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0 -or $changedOutput -notmatch 'Alt\+F8') {
             throw "The CMD settings command did not show the changed shortcut: $changedOutput"
+        }
+
+        $menuOutput = '7' | & $env:ComSpec /d /c call (Join-Path $testBuildDirectory 'OpenSuperWhisper.cmd') 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $menuOutput -notmatch 'Current dictation language:') {
+            throw "The CMD settings menu did not show the dictation language: $menuOutput"
         }
     }
     finally {

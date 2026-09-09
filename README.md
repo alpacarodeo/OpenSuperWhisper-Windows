@@ -9,6 +9,10 @@ transcription is copied and pasted into the app you were using.
 - Runs from the Windows notification area
 - Starts automatically when you sign in
 - Multilingual Whisper `base` model included in each release
+- NVIDIA GPUs are used automatically when the driver supports it (CUDA build)
+- The model stays loaded between dictations, so repeated shortcuts transcribe
+  with minimal delay
+- Defaults to English dictation; the language is configurable
 
 ## Install
 
@@ -24,6 +28,12 @@ installs it under `%LOCALAPPDATA%\Programs\OpenSuperWhisper`, creates Desktop
 and Startup shortcuts, then asks what keyboard command should activate the
 microphone. Press Enter to keep the default `Shift+|`, or type a combination
 such as `Ctrl+Alt+M`, `Alt+F8`, or `Ctrl+Shift+Space`.
+
+When built from source, `setup-windows.ps1` picks the whisper.cpp build
+automatically: systems with an NVIDIA driver new enough for CUDA 12.4
+(551.61 or newer) get the GPU-accelerated build (about 678 MiB download),
+and everything else gets the CPU build (about 8 MiB). You can force one
+with `.\setup-windows.ps1 -Engine cpu` or `-Engine cuda`.
 
 Windows SmartScreen may warn that the executable has an unknown publisher. The
 current builds are not code-signed. You can inspect this repository and the
@@ -67,6 +77,20 @@ are `Ctrl`, `Alt`, `Shift`, and `Win`. Supported keys include `A-Z`, `0-9`,
 `Pipe`, `Backtick`, `Plus`, `Minus`, and `Slash`. At least one modifier is
 required so a normal typing key cannot be captured globally by itself.
 
+## Change the dictation language
+
+Dictation defaults to English, which skips language detection and makes
+transcription slightly faster and more accurate. The same Settings menu offers
+**Change dictation language**, or jump straight to the prompt:
+
+```bat
+"%LOCALAPPDATA%\Programs\OpenSuperWhisper\OpenSuperWhisper.cmd" language
+```
+
+Enter a language code (`en`, `de`, `ja`, ...), a language name such as
+`Portuguese`, or `auto` to detect the language of each recording. Changing the
+language restarts the tray app automatically.
+
 ## Uninstall
 
 Run the included `uninstall.ps1` from the installation directory. It removes
@@ -88,9 +112,12 @@ cd OpenSuperWhisper-Windows
 .\dist\OpenSuperWhisper.Windows.exe
 ```
 
-`setup-windows.ps1` downloads pinned whisper.cpp binaries and the multilingual
-Whisper base model, verifies both hashes, and compiles the WinForms app with the
-.NET Framework C# compiler included in Windows.
+`setup-windows.ps1` downloads pinned whisper.cpp binaries (CUDA build when an
+NVIDIA driver supports it, CPU build otherwise) and the multilingual Whisper
+base model, verifies all hashes, and compiles the WinForms app with the .NET
+Framework C# compiler included in Windows. The tray app keeps a whisper-server
+process with the model loaded and falls back to per-dictation whisper-cli
+invocations if the server cannot run.
 
 Run repository checks with:
 
