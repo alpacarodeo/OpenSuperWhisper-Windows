@@ -22,8 +22,14 @@ try {
 
     $releaseBase = "https://github.com/$repository/releases/latest/download"
     Write-Host 'Downloading the latest OpenSuperWhisper release...'
-    Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$assetName" -OutFile $archivePath
-    Invoke-WebRequest -UseBasicParsing -Uri "$releaseBase/$checksumName" -OutFile $checksumPath
+    & curl.exe -L --fail --retry 3 --retry-delay 2 -o $archivePath "$releaseBase/$assetName"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The release download failed with exit code $LASTEXITCODE"
+    }
+    & curl.exe -L --fail --retry 3 --retry-delay 2 -o $checksumPath "$releaseBase/$checksumName"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The checksum download failed with exit code $LASTEXITCODE"
+    }
 
     $checksumText = (Get-Content -LiteralPath $checksumPath -Raw).Trim()
     if ($checksumText -notmatch '^(?<hash>[A-Fa-f0-9]{64})(?:\s+\*?.+)?$') {

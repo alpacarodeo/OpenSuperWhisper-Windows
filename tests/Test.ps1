@@ -5,7 +5,7 @@ $requiredFiles = @(
     'OpenSuperWhisper.Windows.cs',
     'build-windows.ps1',
     'setup-windows.ps1',
-    'install.ps1',
+    'get-opensuperwhisper.ps1',
     'configure-hotkey.ps1',
     'configure-language.ps1',
     'OpenSuperWhisper.cmd',
