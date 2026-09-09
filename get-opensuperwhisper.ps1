@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$repository = 'Danix2308/OpenSuperWhisper-Windows'
+$repository = 'alpacarodeo/OpenSuperWhisper-Windows'
 $assetName = 'OpenSuperWhisper-Windows.zip'
 $checksumName = "$assetName.sha256"
 $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\OpenSuperWhisper'

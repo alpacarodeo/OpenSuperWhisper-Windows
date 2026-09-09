@@ -20,7 +20,7 @@ Open **Command Prompt (CMD)**. Administrator access is not required. Paste this
 command and press Enter:
 
 ```bat
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/Danix2308/OpenSuperWhisper-Windows/main/install.ps1' | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'https://raw.githubusercontent.com/alpacarodeo/OpenSuperWhisper-Windows/main/get-opensuperwhisper.ps1' | iex"
 ```
 
 The installer downloads the latest release, verifies its SHA-256 checksum,
@@ -106,7 +106,7 @@ the app and its shortcuts. Your recordings and logs are kept unless you pass
 Requirements: 64-bit Windows 10/11 and .NET Framework 4.8.
 
 ```powershell
-git clone https://github.com/Danix2308/OpenSuperWhisper-Windows.git
+git clone https://github.com/alpacarodeo/OpenSuperWhisper-Windows.git
 cd OpenSuperWhisper-Windows
 .\setup-windows.ps1
 .\dist\OpenSuperWhisper.Windows.exe
