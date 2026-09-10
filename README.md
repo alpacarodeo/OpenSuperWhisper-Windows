@@ -29,6 +29,10 @@ and Startup shortcuts, then asks what keyboard command should activate the
 microphone. Press Enter to keep the default `Shift+|`, or type a combination
 such as `Ctrl+Alt+M`, `Alt+F8`, or `Ctrl+Shift+Space`.
 
+The release bundles the GPU-accelerated (CUDA) whisper.cpp engine and the
+Whisper base model (roughly 800 MB); on systems without an NVIDIA GPU the
+engine runs on the CPU.
+
 When built from source, `setup-windows.ps1` picks the whisper.cpp build
 automatically: systems with an NVIDIA driver new enough for CUDA 12.4
 (551.61 or newer) get the GPU-accelerated build (about 678 MiB download),

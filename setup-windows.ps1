@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [ValidateSet('auto', 'cuda', 'cpu')]
-    [string]$Engine = 'auto'
+    [string]$Engine = 'auto',
+    # For build machines without a GPU (CI, repackaging): download the CUDA
+    # engine without requiring a local NVIDIA driver.
+    [switch]$SkipGpuCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,6 +70,14 @@ function Get-NvidiaDriverVersion {
 function Resolve-Engine {
     if ($Engine -eq 'cpu') {
         return 'cpu'
+    }
+
+    if ($SkipGpuCheck) {
+        if ($Engine -ne 'cuda') {
+            throw 'SkipGpuCheck requires -Engine cuda.'
+        }
+        Write-Host 'Skipping NVIDIA detection (-SkipGpuCheck); downloading the CUDA whisper.cpp build.'
+        return 'cuda'
     }
 
     $driverVersion = Get-NvidiaDriverVersion

@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,16 +14,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download verified runtime and build
+      - name: Run repository checks
         shell: powershell
-        run: .\setup-windows.ps1
+        run: .\tests\Test.ps1
+      - name: Download verified CUDA runtime and build
+        shell: powershell
+        run: .\setup-windows.ps1 -Engine cuda -SkipGpuCheck
       - name: Add release files
         shell: powershell
         run: |
           Copy-Item .\LICENSE .\dist\LICENSE -Force
           Copy-Item .\THIRD_PARTY_NOTICES.md .\dist\THIRD_PARTY_NOTICES.md -Force
           Copy-Item .\uninstall.ps1 .\dist\uninstall.ps1 -Force
-          Copy-Item .\README.md .\dist\README.md -Force
       - name: Package and checksum
         shell: powershell
         run: |
@@ -34,4 +37,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" .\OpenSuperWhisper-Windows.zip .\OpenSuperWhisper-Windows.zip.sha256 --title "OpenSuperWhisper for Windows ${{ github.ref_name }}" --generate-notes
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notlike 'v*') {
+              $tag = 'v' + (Get-Date -Format 'yyyy.MM.dd.HHmm')
+          }
+          gh release create $tag .\OpenSuperWhisper-Windows.zip .\OpenSuperWhisper-Windows.zip.sha256 `
+              --title "OpenSuperWhisper for Windows $tag" `
+              --generate-notes `
+              --notes "GPU-accelerated build: the whisper.cpp CUDA engine and the Whisper base model are bundled, the model stays loaded between dictations, and dictation defaults to English. Systems without an NVIDIA GPU run on the CPU."
