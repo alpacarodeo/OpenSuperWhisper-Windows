@@ -50,7 +50,7 @@ if (($trackedText -join "`n") -match 'C:\\Users\\') {
 }
 
 $source = Get-Content -LiteralPath (Join-Path $repositoryRoot 'OpenSuperWhisper.Windows.cs') -Raw
-foreach ($expectedText in @('HotkeyDefinition', 'LanguageDefinition', 'WhisperServer', '--validate-hotkey=', '--validate-language=', 'hotkey.txt', 'language.txt', 'RegisterHotKey', 'whisper-cli.exe', 'whisper-server.exe', 'ggml-base.bin')) {
+foreach ($expectedText in @('HotkeyDefinition', 'LanguageDefinition', 'WhisperServer', 'RecordingCursor', 'SetSystemCursor', '--validate-hotkey=', '--validate-language=', '--validate-recording-cursor', 'hotkey.txt', 'language.txt', 'RegisterHotKey', 'whisper-cli.exe', 'whisper-server.exe', 'ggml-base.bin')) {
     if (-not $source.Contains($expectedText)) {
         throw "Expected implementation marker is missing: $expectedText"
     }
@@ -94,6 +94,11 @@ try {
         if ($validation.ExitCode -eq 0) {
             throw "Invalid language was accepted: $invalidLanguage"
         }
+    }
+
+    $cursorValidation = Start-Process -FilePath $builtExecutable -ArgumentList '--validate-recording-cursor' -WindowStyle Hidden -Wait -PassThru
+    if ($cursorValidation.ExitCode -ne 0) {
+        throw 'The recording cursor self-check failed.'
     }
 
     $configureScript = Join-Path $repositoryRoot 'configure-hotkey.ps1'

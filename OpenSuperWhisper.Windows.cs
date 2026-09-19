@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -64,6 +65,12 @@ namespace OpenSuperWhisperWindows
                         configuredLanguage.Code,
                         argument.Substring(ExpectConfiguredLanguagePrefix.Length),
                         StringComparison.OrdinalIgnoreCase) ? 0 : 3;
+                    return;
+                }
+
+                if (string.Equals(argument, "--validate-recording-cursor", StringComparison.OrdinalIgnoreCase))
+                {
+                    Environment.ExitCode = RecordingCursor.SelfTest() ? 0 : 2;
                     return;
                 }
             }
@@ -743,6 +750,162 @@ namespace OpenSuperWhisperWindows
         }
     }
 
+    // Swaps the system arrow cursor for a green dot while the microphone is
+    // live, so the recording state stays visible no matter which application
+    // the mouse is over. SetSystemCursor consumes the handle it is given, and
+    // the matching restore reloads every system cursor from the registry —
+    // a call that succeeds (and is a no-op) even when no swap ever happened,
+    // which keeps every error and exit path safe to call Hide() from.
+    internal static class RecordingCursor
+    {
+        private const uint CursorArrow = 32512;   // OCR_NORMAL
+        private const uint SpiSetCursors = 0x0057; // SPI_SETCURSORS
+        private const int CursorSize = 32;
+        private const float DotExtent = 20f;
+        private const float DotInset = 6f;
+
+        private static bool active;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetSystemCursor(IntPtr cursor, uint systemCursorId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool GetIconInfo(IntPtr icon, out IconInfo iconInfo);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr CreateIconIndirect(ref IconInfo iconInfo);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr icon);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SystemParametersInfo(uint action, uint parameter, IntPtr value, uint update);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern bool DeleteObject(IntPtr objectHandle);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IconInfo
+        {
+            internal bool IsIcon;
+            internal int XHotspot;
+            internal int YHotspot;
+            internal IntPtr MaskBitmap;
+            internal IntPtr ColorBitmap;
+        }
+
+        internal static void Show()
+        {
+            if (active)
+            {
+                return;
+            }
+
+            IntPtr cursor = CreateGreenCursor();
+            if (cursor == IntPtr.Zero)
+            {
+                AppLog.Write("Could not create the recording cursor; dictation continues without it.");
+                return;
+            }
+
+            if (!SetSystemCursor(cursor, CursorArrow))
+            {
+                AppLog.Write("SetSystemCursor failed. Win32 error: " + Marshal.GetLastWin32Error());
+                DestroyIcon(cursor);
+                return;
+            }
+
+            active = true;
+        }
+
+        internal static void Hide()
+        {
+            if (!active)
+            {
+                return;
+            }
+
+            active = false;
+            SystemParametersInfo(SpiSetCursors, 0, IntPtr.Zero, 0);
+        }
+
+        // Builds the green dot once per dictation and reports whether the
+        // full create path works on this machine. Never swaps the live cursor.
+        internal static bool SelfTest()
+        {
+            IntPtr cursor = CreateGreenCursor();
+            if (cursor == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            DestroyIcon(cursor);
+            return true;
+        }
+
+        private static IntPtr CreateGreenCursor()
+        {
+            try
+            {
+                using (Bitmap bitmap = new Bitmap(CursorSize, CursorSize, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                using (Graphics graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    graphics.Clear(Color.Transparent);
+                    using (SolidBrush fill = new SolidBrush(Color.FromArgb(255, 40, 190, 70)))
+                    using (Pen ring = new Pen(Color.FromArgb(255, 16, 96, 42), 2f))
+                    {
+                        graphics.FillEllipse(fill, DotInset, DotInset, DotExtent, DotExtent);
+                        graphics.DrawEllipse(ring, DotInset, DotInset, DotExtent, DotExtent);
+                    }
+
+                    return CreateCursorFromBitmap(bitmap);
+                }
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("Recording cursor creation failed: " + exception.Message);
+                return IntPtr.Zero;
+            }
+        }
+
+        // GetHicon keeps the bitmap's alpha, but the icon it produces points
+        // from its top-left corner; rewrapping its bitmaps with fIcon=false
+        // and a centered hotspot yields a cursor that points from the middle
+        // of the dot. The ICONINFO bitmaps are copies, so they are deleted
+        // here after CreateIconIndirect has consumed them.
+        private static IntPtr CreateCursorFromBitmap(Bitmap bitmap)
+        {
+            IntPtr icon = bitmap.GetHicon();
+            try
+            {
+                IconInfo info;
+                if (!GetIconInfo(icon, out info))
+                {
+                    return IntPtr.Zero;
+                }
+
+                info.IsIcon = false;
+                info.XHotspot = CursorSize / 2;
+                info.YHotspot = CursorSize / 2;
+                IntPtr cursor = CreateIconIndirect(ref info);
+                if (info.MaskBitmap != IntPtr.Zero)
+                {
+                    DeleteObject(info.MaskBitmap);
+                }
+                if (info.ColorBitmap != IntPtr.Zero)
+                {
+                    DeleteObject(info.ColorBitmap);
+                }
+                return cursor;
+            }
+            finally
+            {
+                DestroyIcon(icon);
+            }
+        }
+    }
+
     internal sealed class MainForm : Form
     {
         private const int HotkeyId = 0x5357;
@@ -1023,6 +1186,7 @@ namespace OpenSuperWhisperWindows
                 SendMci("record " + RecordingAlias, false);
 
                 state = AppState.Recording;
+                RecordingCursor.Show();
                 SetStatus(
                     "Recording...",
                     "Speak now. Press " + hotkey.DisplayName + " again to stop and transcribe.",
@@ -1036,6 +1200,7 @@ namespace OpenSuperWhisperWindows
             {
                 AppLog.Write("Microphone start failed: " + exception);
                 state = AppState.Idle;
+                RecordingCursor.Hide();
                 SendMci("close " + RecordingAlias, true);
                 ShowError("Could not start the microphone", exception);
             }
@@ -1049,6 +1214,7 @@ namespace OpenSuperWhisperWindows
                 SendMci("stop " + RecordingAlias, false);
                 SendMci("save " + RecordingAlias + " \"" + currentRecordingPath + "\"", false);
                 SendMci("close " + RecordingAlias, true);
+                RecordingCursor.Hide();
 
                 state = AppState.Transcribing;
                 SetStatus(
@@ -1095,6 +1261,7 @@ namespace OpenSuperWhisperWindows
             finally
             {
                 state = AppState.Idle;
+                RecordingCursor.Hide();
                 recordButton.Enabled = true;
                 recordButton.Text = "Start recording  (" + hotkey.DisplayName + ")";
                 recordButton.BackColor = Color.FromArgb(33, 33, 33);
@@ -1258,6 +1425,7 @@ namespace OpenSuperWhisperWindows
             {
                 SendMci("stop " + RecordingAlias, true);
                 SendMci("close " + RecordingAlias, true);
+                RecordingCursor.Hide();
             }
 
             if (whisperServer != null)

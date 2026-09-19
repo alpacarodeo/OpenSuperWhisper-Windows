@@ -57,6 +57,10 @@ Recordings and text files are stored in
 The shortcut is global while the app is running. Exit from the tray icon to
 release it.
 
+While recording, the mouse pointer turns into a green dot system-wide, so the
+recording state stays visible no matter which application you are looking at.
+The normal pointer returns as soon as recording stops.
+
 ## Change the microphone shortcut
 
 Open the **OpenSuperWhisper Settings** shortcut on the Desktop. It opens a CMD
