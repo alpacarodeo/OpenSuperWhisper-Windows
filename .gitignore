@@ -4,3 +4,4 @@ dist/
 *.sha256
 *.log
 .vs/
+.ai/
